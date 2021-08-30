@@ -81,6 +81,32 @@ header udp_t {
     bit<16> checksum;
 }
 
+header dns_t {
+    bit<16> id;
+    bit<1> is_response;
+    bit<4> opcode;
+    bit<1> auth_answer;
+    bit<1> trunc;
+    bit<1> recur_desired;
+    bit<1> recur_avail;
+    bit<1> reserved;
+    bit<1> authentic_data;
+    bit<1> checking_disabled;
+    bit<4> resp_code;
+    bit<16> q_count;
+    bit<16> answer_count;
+    bit<16> auth_rec;
+    bit<16> addn_rec;
+}
+
+// label length
+header dns_q_label_len_t {
+    bit<8> label_len;
+}
+
+header domain_byte_t {
+    bit<8> domain_byte;
+}
 
 struct my_ingress_metadata_t {
     bit<4> tcp_dataOffset;
@@ -97,6 +123,10 @@ struct my_ingress_headers_t {
     ipv4_t      ipv4;
     tcp_t       tcp;
     udp_t       udp; 
+    // DNS
+    dns_t       dns_header;
+    dns_q_label_len_t q_label_len;
+    domain_byte_t[256] total_domain;
 }
 
     /***********************  H E A D E R S  ************************/
@@ -172,6 +202,16 @@ parser IngressParser(packet_in        pkt,
         meta.udp_length = hdr.udp.length_;
         meta.srcport=hdr.udp.srcPort;
         meta.dstport=hdr.udp.dstPort;
+        // transition accept; 
+        transition select (hdr.udp.srcPort) {
+            53: parse_dns;
+            default: accept;
+        }
+    }
+
+    // parse dns query
+    state parse_dns {
+        pkt.extract(hdr.dns_header);
         transition accept;
     }
 }
