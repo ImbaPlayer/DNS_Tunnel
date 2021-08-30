@@ -6,7 +6,7 @@
  *
  *Author：dgl
  */
- // 共96bit特征，顺序为调整过后的顺序，与bin_feature中的顺序一致，一个表提取ip tcp udp 相应的特征
+ // test for varbit in ip options
 
 
 
@@ -61,6 +61,10 @@ header ipv4_t {
     ip4Addr_t dstAddr;
 }
 
+header ipv4_options_h {
+    varbit<320> options;
+}
+
 header tcp_t {
     bit<16> srcPort;
     bit<16> dstPort;
@@ -95,6 +99,7 @@ struct my_ingress_headers_t {
     // my change
     ethernet_t  ethernet;
     ipv4_t      ipv4;
+    ipv4_options_h ipv4_options;
     tcp_t       tcp;
     udp_t       udp; 
 }
@@ -148,7 +153,21 @@ parser IngressParser(packet_in        pkt,
     state parse_ipv4 {
         
         pkt.extract(hdr.ipv4);
-        transition select(hdr.ipv4.protocol) {
+        transition select(hdr.ipv4.ihl) {
+            5: dispatch_on_protocol;
+            default: parse_ipv4_options;
+        }
+        
+   }
+
+   // parse ipv4 options
+   state parse_ipv4_options {
+       pkt.extract(hdr.ipv4_options, ((bit<32>)hdr.ipv4.ihl - 5) << 5);
+       transition dispatch_on_protocol;
+   }
+
+   state dispatch_on_protocol {
+       transition select(hdr.ipv4.protocol) {
             PROTO_TCP   : parse_tcp;
             PROTO_UDP   : parse_udp;
             // default: accept;
