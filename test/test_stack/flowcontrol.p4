@@ -107,7 +107,9 @@ header dns_q_label_len_t {
 header domain_byte_t {
     bit<8> domain_byte;
 }
-
+header bit_test_t{
+    bit<512> bit_test;
+}
 struct my_ingress_metadata_t {
     bit<4> tcp_dataOffset;
     bit<16> tcp_window;
@@ -115,6 +117,7 @@ struct my_ingress_metadata_t {
     bit<16> srcport;
     bit<16> dstport;
     bit<112> bin_feature; // total binary feature
+    bit<4> doamin_index;
 }
 
 struct my_ingress_headers_t {
@@ -126,7 +129,15 @@ struct my_ingress_headers_t {
     // DNS
     dns_t       dns_header;
     dns_q_label_len_t q_label_len;
-    domain_byte_t[256] total_domain;
+    domain_byte_t[32] total_domain;
+    domain_byte_t[32] total_domain_1;
+    domain_byte_t[32] total_domain_2;
+    domain_byte_t[32] total_domain_3;
+    domain_byte_t[32] total_domain_4;
+    domain_byte_t[32] total_domain_5;
+    domain_byte_t[32] total_domain_6;
+    domain_byte_t[32] total_domain_7;
+    bit_test_t bit_test;
 }
 
     /***********************  H E A D E R S  ************************/
@@ -154,7 +165,7 @@ parser IngressParser(packet_in        pkt,
     out my_ingress_metadata_t         meta,
     out ingress_intrinsic_metadata_t  ig_intr_md)
 {
-    
+    ParserCounter() counter;
     //TofinoIngressParser() tofino_parser;
     state start {
         pkt.extract(ig_intr_md);
@@ -212,8 +223,53 @@ parser IngressParser(packet_in        pkt,
     // parse dns query
     state parse_dns {
         pkt.extract(hdr.dns_header);
+        transition select(hdr.dns_header.is_response) {
+            // 0 is query
+            0: parse_dns_query;
+            default: accept;
+        }
+    }
+
+    // state parse_dns_query {
+    //     pkt.extract(hdr.q_label_len);
+    //     counter.set(hdr.q_label_len.label_len);
+    //     transition select(counter.is_zero()) {
+    //         true: accept;
+    //         false: parse_domain_byte;
+    //     }
+    // }
+
+    // state parse_domain_byte {
+    //     pkt.extract(hdr.total_domain.next);
+    //     // hdr.total_domain.pop_front(8w1);
+    //     // hdr.total_domain.lastIndex = 0;
+    //     counter.decrement(8w1);
+    //     transition accept;
+    // }
+    
+    state parse_dns_query {
+        pkt.extract(hdr.q_label_len);
+        counter.set(hdr.q_label_len.label_len);
+        // counter.set(8w4);
+        transition select(counter.is_zero()) {
+            true: finish_parse_domain;
+            false: parse_domain_byte;
+        }
+    }
+
+    state parse_domain_byte {
+        pkt.extract(hdr.total_domain.next);
+        counter.decrement(8w1);
+        transition select(counter.is_zero()) {
+            true: parse_dns_query;
+            false: parse_domain_byte;
+        }
+    }
+
+    state finish_parse_domain {
         transition accept;
     }
+    
 }
 
    
