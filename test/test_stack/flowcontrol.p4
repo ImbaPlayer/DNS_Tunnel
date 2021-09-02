@@ -110,6 +110,9 @@ header domain_byte_t {
 header bit_test_t{
     bit<512> bit_test;
 }
+header total_payload_t{
+    bit<2048> total_payload;
+}
 struct my_ingress_metadata_t {
     bit<4> tcp_dataOffset;
     bit<16> tcp_window;
@@ -117,7 +120,8 @@ struct my_ingress_metadata_t {
     bit<16> srcport;
     bit<16> dstport;
     bit<112> bin_feature; // total binary feature
-    bit<4> doamin_index;
+    bit<4> domain_index;
+    bit<8> total_domain_len;
 }
 
 struct my_ingress_headers_t {
@@ -138,6 +142,7 @@ struct my_ingress_headers_t {
     domain_byte_t[32] total_domain_6;
     domain_byte_t[32] total_domain_7;
     bit_test_t bit_test;
+    total_payload_t total_payload;
 }
 
     /***********************  H E A D E R S  ************************/
@@ -165,10 +170,13 @@ parser IngressParser(packet_in        pkt,
     out my_ingress_metadata_t         meta,
     out ingress_intrinsic_metadata_t  ig_intr_md)
 {
-    ParserCounter() counter;
+    ParserCounter() label_counter;
+    ParserCounter() domain_counter_32;
+    bit<8> tmp_domain_len;
     //TofinoIngressParser() tofino_parser;
     state start {
         pkt.extract(ig_intr_md);
+        tmp_domain_len = 0;
         transition parse_port_metadata;
     }
     
@@ -223,52 +231,85 @@ parser IngressParser(packet_in        pkt,
     // parse dns query
     state parse_dns {
         pkt.extract(hdr.dns_header);
+        meta.domain_index = 0;
+        meta.total_domain_len = 0;
         transition select(hdr.dns_header.is_response) {
             // 0 is query
-            0: parse_dns_query;
+            0: parse_dns_query_0;
             default: accept;
         }
     }
+    // test for total paylaod
+    // state parse_dns {
+    //     pkt.extract(hdr.dns_header);
+    //     pkt.extract(hdr.total_payload);
+    //     transition accept;
+    // }
 
+    
     // state parse_dns_query {
     //     pkt.extract(hdr.q_label_len);
     //     counter.set(hdr.q_label_len.label_len);
+    //     domain_counter_32.set(8w32);
     //     transition select(counter.is_zero()) {
-    //         true: accept;
+    //         true: finish_parse_domain;
     //         false: parse_domain_byte;
     //     }
     // }
-
     // state parse_domain_byte {
     //     pkt.extract(hdr.total_domain.next);
-    //     // hdr.total_domain.pop_front(8w1);
-    //     // hdr.total_domain.lastIndex = 0;
     //     counter.decrement(8w1);
-    //     transition accept;
+    //     transition select(counter.is_zero()) {
+    //         true: parse_dns_query;
+    //         false: parse_domain_byte;
+    //     }
     // }
-    
-    state parse_dns_query {
+    state parse_dns_query_0 {
         pkt.extract(hdr.q_label_len);
-        counter.set(hdr.q_label_len.label_len);
-        // counter.set(8w4);
-        transition select(counter.is_zero()) {
-            true: finish_parse_domain;
-            false: parse_domain_byte;
+        label_counter.set(hdr.q_label_len.label_len);
+        domain_counter_32.set(8w32);
+        transition estimate_32_0;
+    }
+
+    state estimate_32_0 {
+        transition select(domain_counter_32.is_zero()) {
+            true: estimate_32_1;
+            false: estimate_label_0;
         }
     }
 
-    state parse_domain_byte {
-        pkt.extract(hdr.total_domain.next);
-        counter.decrement(8w1);
-        transition select(counter.is_zero()) {
-            true: parse_dns_query;
-            false: parse_domain_byte;
+    state estimate_label_0 {
+        transition select(label_counter.is_zero()) {
+            true: reset_label_0;
+            false: parse_domain_byte_0;
         }
+    }
+
+    state reset_label_0 {
+        pkt.extract(hdr.q_label_len);
+        label_counter.set(hdr.q_label_len.label_len);
+        transition select(label_counter.is_zero()) {
+            true: finish_parse_domain;
+            false: parse_domain_byte_0;
+        }
+    }
+
+    state parse_domain_byte_0 {
+        pkt.extract(hdr.total_domain.next);
+        label_counter.decrement(8w1);
+        domain_counter_32.decrement(8w1);
+        transition estimate_32_0;
     }
 
     state finish_parse_domain {
         transition accept;
     }
+
+    // go to domain_1
+    state estimate_32_1 {
+        transition accept;
+    }
+    
     
 }
 
