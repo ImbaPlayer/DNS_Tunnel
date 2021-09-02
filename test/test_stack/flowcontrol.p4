@@ -267,13 +267,13 @@ parser IngressParser(packet_in        pkt,
     state parse_dns_query_0 {
         pkt.extract(hdr.q_label_len);
         label_counter.set(hdr.q_label_len.label_len);
-        domain_counter_32.set(8w32);
+        domain_counter_32.set(8w8);
         transition estimate_32_0;
     }
 
     state estimate_32_0 {
         transition select(domain_counter_32.is_zero()) {
-            true: estimate_32_1;
+            true: set_domain_counter_1;
             false: estimate_label_0;
         }
     }
@@ -306,10 +306,48 @@ parser IngressParser(packet_in        pkt,
     }
 
     // go to domain_1
-    state estimate_32_1 {
-        transition accept;
+    state set_domain_counter_1 {
+        domain_counter_32.set(8w8);
+
+        transition estimate_32_1;
     }
     
+    state estimate_32_1 {
+        transition select(domain_counter_32.is_zero()) {
+            true: set_domain_counter_2;
+            false: estimate_label_1;
+        }
+    }
+
+    state estimate_label_1 {
+        transition select(label_counter.is_zero()) {
+            true: reset_label_1;
+            false: parse_domain_byte_1;
+        }
+    }
+
+    state reset_label_1 {
+        pkt.extract(hdr.q_label_len);
+        label_counter.set(hdr.q_label_len.label_len);
+        transition select(label_counter.is_zero()) {
+            true: finish_parse_domain;
+            false: parse_domain_byte_1;
+        }
+    }
+
+    state parse_domain_byte_1 {
+
+        pkt.extract(hdr.total_domain_1.next);
+        label_counter.decrement(8w1);
+        domain_counter_32.decrement(8w1);
+        // transition accept;
+        transition estimate_32_1;
+    }
+
+    // go to domain_2
+    state set_domain_counter_2 {
+        transition accept;
+    }
     
 }
 
