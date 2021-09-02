@@ -121,7 +121,9 @@ struct my_ingress_metadata_t {
     bit<16> srcport;
     bit<16> dstport;
     bit<112> bin_feature; // total binary feature
-    bit<4> doamin_index;
+    bit<4> domain_index;
+    bit<32> domain_stack_index;
+    bit<256> domain_part;
 }
 
 struct my_ingress_headers_t {
@@ -296,12 +298,13 @@ parser IngressParser(packet_in        pkt,
     }
     // label 2
     state parse_q2 {
+        meta.domain_stack_index = hdr.total_domain.lastIndex;
         pkt.extract(hdr.q_label_len);
         counter.set(hdr.q_label_len.label_len);
         transition select(hdr.q_label_len.label_len) {
             // 0
             0x00: finish_parse_domain;
-            // <= 32
+            // <= 32 format: value &&& mask
             0x00 &&& 0xE0: parse_q2_part1;
             0x20: parse_q2_part1;
             // > 32
@@ -412,18 +415,21 @@ parser IngressParser(packet_in        pkt,
     }
 
     // label 5
+    // state parse_q5 {
+    //     pkt.extract(hdr.q_label_len);
+    //     counter.set(hdr.q_label_len.label_len);
+    //     transition select(hdr.q_label_len.label_len) {
+    //         // 0
+    //         0x00: finish_parse_domain;
+    //         // <= 32
+    //         0x00 &&& 0xE0: parse_q5_part1;
+    //         0x20: parse_q5_part1;
+    //         // > 32
+    //         default: parse_q5_more_than_32;
+    //     }
+    // }
     state parse_q5 {
-        pkt.extract(hdr.q_label_len);
-        counter.set(hdr.q_label_len.label_len);
-        transition select(hdr.q_label_len.label_len) {
-            // 0
-            0x00: finish_parse_domain;
-            // <= 32
-            0x00 &&& 0xE0: parse_q5_part1;
-            0x20: parse_q5_part1;
-            // > 32
-            default: parse_q5_more_than_32;
-        }
+        transition accept;
     }
     
     state parse_q5_part1 {
@@ -547,85 +553,22 @@ control Ingress(
 {   
     
     
-    action ac_parse_ip_feature() {
-        meta.bin_feature[71:68] = hdr.ipv4.ihl;
-        meta.bin_feature[67:60] = hdr.ipv4.diffserv;
-        // meta.bin_feature[75:68] = (bit<8>)hdr.ipv4.flags;
-        meta.bin_feature[59:52] = hdr.ipv4.ttl;
-        meta.bin_feature[15:0] = hdr.ipv4.totalLen;
-        meta.bin_feature[79:72] = hdr.ipv4.protocol;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x1;
-    }
-    action ac_parse_tcp_feature() {
-        // meta.bin_feature[67:52] = hdr.tcp.srcPort;
-        // meta.bin_feature[83:68] = hdr.tcp.dstPort;
-        // meta.bin_feature[51:48] = hdr.tcp.dataOffset;
-        meta.bin_feature[51:48] = meta.tcp_dataOffset;
-        // meta.bin_feature[55:48] = hdr.tcp.flags;
-        // meta.bin_feature[47:32] = hdr.tcp.window;
-        meta.bin_feature[47:32] = meta.tcp_window;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x2;
-    }
-    action ac_parse_udp_feature() {
-        // meta.bin_feature[67:52] = hdr.udp.srcPort;
-        // meta.bin_feature[83:68] = hdr.udp.dstPort;
-        // meta.bin_feature[31:16] = hdr.udp.length_;
-        meta.bin_feature[31:16] = meta.udp_length;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x3;
-    }
-    action ac_parse_port_feature() {
-        meta.bin_feature[111:96] = meta.srcport;
-        meta.bin_feature[95:80] = meta.dstport;
-    }
-    action ac_parse_bin_feature() {
-        ac_parse_ip_feature();
-        ac_parse_tcp_feature();
-        ac_parse_udp_feature();
-        ac_parse_port_feature();
+    action ac_test_stack() {
+        // meta.domain_stack_index = hdr.total_domain.lastIndex;
+        meta.domain_part[7:0] = hdr.total_domain[0].domain_byte;
     }
 
     @pragma stage 0
-    table parse_bin_feature{
+    table tb_test_stack{
         actions = {
-            ac_parse_bin_feature;
+            ac_test_stack;
         }
-        default_action = ac_parse_bin_feature;
+        default_action = ac_test_stack;
     }
-
-    // action: decide forward port
-    action ac_packet_forward(macAddr_t dstAddr, PortId_t port){
-        // ig_tm_md.ucast_egress_port = port;
-        ig_tm_md.ucast_egress_port = 189;
-        hdr.ethernet.dstAddr = dstAddr;
-    }
-    action default_forward() {
-        ig_tm_md.ucast_egress_port = 189;
-        hdr.ethernet.dstAddr = 0x000000020209;
-    }
-    @pragma stage 1
-    table tb_packet_cls {
-        key = {
-            meta.bin_feature: ternary;
-        }
-        actions = {
-            ac_packet_forward;
-            default_forward;
-        }
-        default_action = default_forward();
-        size = 6000;
-    }
-
-    
 
     apply {
-        // stage 0 concat binary feature
-        parse_bin_feature.apply();
+        tb_test_stack.apply();
 
-        // stage 1 classification
-        tb_packet_cls.apply();
 
         ig_tm_md.bypass_egress = 1w1;
     }
