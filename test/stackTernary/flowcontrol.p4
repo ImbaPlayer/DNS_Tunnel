@@ -124,6 +124,7 @@ struct my_ingress_metadata_t {
     bit<4> domain_index;
     bit<32> domain_stack_index;
     bit<256> domain_part;
+    bit<32> hashout;
 }
 
 struct my_ingress_headers_t {
@@ -551,7 +552,7 @@ control Ingress(
     inout ingress_intrinsic_metadata_for_tm_t        ig_tm_md
      )
 {   
-    
+     
     
     action ac_test_stack() {
         // meta.domain_stack_index = hdr.total_domain.lastIndex;
@@ -566,8 +567,38 @@ control Ingress(
         default_action = ac_test_stack;
     }
 
+    Hash<bit<32>>(HashAlgorithm_t.CRC32) hash_main_key;
+	action do_hash_domain() {                                  
+        meta.hashout= (bit<32>)hash_main_key.get({ hdr.total_domain[0].domain_byte}); 
+    }
+    @pragma stage 0
+    table tb_test_hash {
+        actions = {
+            do_hash_domain;
+        }
+        default_action = do_hash_domain;
+    }
+
+    action ac_test_key_stack() {
+
+    }
+
+    @pragma stage 0
+    table tb_test_key_stack {
+        key = {
+            hdr.total_domain[0].domain_byte: ternary;
+            hdr.total_domain[1].domain_byte: ternary;
+        }
+        actions = {
+            ac_test_key_stack;
+        }
+        default_action = ac_test_key_stack;
+    }
+
     apply {
         tb_test_stack.apply();
+        tb_test_hash.apply();
+        tb_test_key_stack.apply();
 
 
         ig_tm_md.bypass_egress = 1w1;
