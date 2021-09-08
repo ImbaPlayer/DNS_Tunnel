@@ -66,7 +66,16 @@ header ipv4_options_h {
 }
 
 header dns_domain_h {
-    varbit<2048> dns_tomain;
+    bit<2048> dns_tomain;
+}
+
+// label length
+header dns_q_label_len_t {
+    bit<8> label_len;
+}
+
+header domain_byte_t {
+    bit<8> domain_byte;
 }
 
 header tcp_t {
@@ -97,6 +106,8 @@ struct my_ingress_metadata_t {
     bit<16> srcport;
     bit<16> dstport;
     bit<112> bin_feature; // total binary feature
+    bit<32> packet_in_len;
+    bit<8> domain_index;
 }
 
 struct my_ingress_headers_t {
@@ -106,7 +117,9 @@ struct my_ingress_headers_t {
     ipv4_options_h ipv4_options;
     tcp_t       tcp;
     udp_t       udp;
+    dns_q_label_len_t q_label_len;
     dns_domain_h total_dns_domain; 
+    domain_byte_t[256] domain_list;
 }
 
     /***********************  H E A D E R S  ************************/
@@ -136,6 +149,7 @@ parser IngressParser(packet_in        pkt,
 {
     
     //TofinoIngressParser() tofino_parser;
+    ParserCounter() counter;
     state start {
         pkt.extract(ig_intr_md);
         transition parse_port_metadata;
@@ -198,22 +212,41 @@ parser IngressParser(packet_in        pkt,
         meta.dstport=hdr.udp.dstPort;
         // transition accept; 
         transition select (hdr.udp.srcPort) {
-            53: parse_dns;
+            53: parse_dns_query;
             default: accept;
         }
     }
 
     // parse dns query
-    // state parse_dns {
-    //     pkt.extract(hdr.total_dns_domain);
-    //     transition accept;
-    // }
-
-    // test varbit
-    state parse_dns {
-        pkt.extract(hdr.total_dns_domain, 32w32);
+    state parse_dns_query {
+        // meta.packet_in_len = pkt.length();
+        pkt.extract(hdr.total_dns_domain);
         transition accept;
     }
+
+    // test domain byte loop
+    // state parse_dns_query {
+    //     pkt.extract(hdr.q_label_len);
+    //     counter.set(hdr.q_label_len.label_len);
+    //     // counter.set(8w4);
+    //     transition select(counter.is_zero()) {
+    //         true: finish_parse_domain;
+    //         false: parse_domain_byte;
+    //     }
+    // }
+
+    // state parse_domain_byte {
+    //     pkt.extract(hdr.domain_list.next);
+    //     counter.decrement(8w1);
+    //     transition select(counter.is_zero()) {
+    //         true: parse_dns_query;
+    //         false: parse_domain_byte;
+    //     }
+    // }
+
+    // state finish_parse_domain {
+    //     transition accept;
+    // }
 }
 
    
@@ -230,85 +263,23 @@ control Ingress(
 {   
     
     
-    action ac_parse_ip_feature() {
-        meta.bin_feature[71:68] = hdr.ipv4.ihl;
-        meta.bin_feature[67:60] = hdr.ipv4.diffserv;
-        // meta.bin_feature[75:68] = (bit<8>)hdr.ipv4.flags;
-        meta.bin_feature[59:52] = hdr.ipv4.ttl;
-        meta.bin_feature[15:0] = hdr.ipv4.totalLen;
-        meta.bin_feature[79:72] = hdr.ipv4.protocol;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x1;
-    }
-    action ac_parse_tcp_feature() {
-        // meta.bin_feature[67:52] = hdr.tcp.srcPort;
-        // meta.bin_feature[83:68] = hdr.tcp.dstPort;
-        // meta.bin_feature[51:48] = hdr.tcp.dataOffset;
-        meta.bin_feature[51:48] = meta.tcp_dataOffset;
-        // meta.bin_feature[55:48] = hdr.tcp.flags;
-        // meta.bin_feature[47:32] = hdr.tcp.window;
-        meta.bin_feature[47:32] = meta.tcp_window;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x2;
-    }
-    action ac_parse_udp_feature() {
-        // meta.bin_feature[67:52] = hdr.udp.srcPort;
-        // meta.bin_feature[83:68] = hdr.udp.dstPort;
-        // meta.bin_feature[31:16] = hdr.udp.length_;
-        meta.bin_feature[31:16] = meta.udp_length;
-        // modify header for test
-        // hdr.ipv4.hdrChecksum = 0x3;
-    }
-    action ac_parse_port_feature() {
-        meta.bin_feature[111:96] = meta.srcport;
-        meta.bin_feature[95:80] = meta.dstport;
-    }
-    action ac_parse_bin_feature() {
-        ac_parse_ip_feature();
-        ac_parse_tcp_feature();
-        ac_parse_udp_feature();
-        ac_parse_port_feature();
+    action ac_test_index_list() {
+
     }
 
-    @pragma stage 0
-    table parse_bin_feature{
-        actions = {
-            ac_parse_bin_feature;
-        }
-        default_action = ac_parse_bin_feature;
-    }
-
-    // action: decide forward port
-    action ac_packet_forward(macAddr_t dstAddr, PortId_t port){
-        // ig_tm_md.ucast_egress_port = port;
-        ig_tm_md.ucast_egress_port = 189;
-        hdr.ethernet.dstAddr = dstAddr;
-    }
-    action default_forward() {
-        ig_tm_md.ucast_egress_port = 189;
-        hdr.ethernet.dstAddr = 0x000000020209;
-    }
-    @pragma stage 1
-    table tb_packet_cls {
+    table tb_test_index_list {
         key = {
-            meta.bin_feature: ternary;
+            hdr.total_dns_domain[meta.domain_index + 1:meta.domain_index]: ternary;
         }
         actions = {
-            ac_packet_forward;
-            default_forward;
+            ac_test_index_list;
         }
-        default_action = default_forward();
-        size = 6000;
+        default_action = ac_test_index_list;
     }
-
-    
 
     apply {
-        // stage 0 concat binary feature
-        parse_bin_feature.apply();
-
-        // stage 1 classification
-        tb_packet_cls.apply();
+        meta.domain_index = 1;
+        tb_test_index_list.apply();
 
         ig_tm_md.bypass_egress = 1w1;
     }
